@@ -1,42 +1,55 @@
 package main
 
 import (
+	"crypto/rand"
 	"fmt"
-	"log"
-	"math/rand"
+	"math/big"
 	"strings"
+
+	"github.com/fatih/color"
 )
 
 func main() {
-	fmt.Println("Welcome to seven, the rules are simple. You bet if the sum of two dice rolls is over/under or equal with seven. Press ctrl+C")
+	fmt.Println(`
+Welcome to seven!
+The rules are simple, you bet if the sum of two dice rolls is over/under or equal with seven.
+
+Press Ctrl+C to exit.`)
+
 	for {
 		bet := getBets()
 		dices := throwDices()
-		fmt.Printf("Dice result: %d\n", dices)
+		fmt.Printf("\n\tDice result: %d\n", dices)
 
 		res := checkResult(dices)
 		if bet == res {
-			fmt.Println("You won!")
+			color.Green("\tYou won!")
 		} else {
-			fmt.Println("You lost!")
+			color.Red("\tYou lost!")
 		}
 	}
 
 }
 
 func throwDices() int {
-	dice := rand.Intn(5) + 1
-	dice2 := rand.Intn(5) + 1
-	return dice + dice2
+	dice, err := rand.Int(rand.Reader, big.NewInt(6))
+	dice2, err := rand.Int(rand.Reader, big.NewInt(6))
+	if err != nil {
+		panic("failed to generate random number: " + err.Error())
+	}
+	return int(2 + dice.Int64() + dice2.Int64())
 }
 
 func checkResult(sum int) Bet {
-	if sum < 7 {
+	switch {
+	case 0 < sum && sum < 7:
 		return Under
-	} else if sum == 7 {
-		return Seven
-	} else {
+	case 7 < sum && sum < 13:
 		return Over
+	case sum == 7:
+		return Seven
+	default:
+		panic("bad sum, got: " + string(sum))
 	}
 }
 
@@ -59,14 +72,14 @@ func (b Bet) String() string {
 }
 
 func getBets() Bet {
+	c := color.New().Add(color.Underline)
 	for {
 		var picked string
 
-		fmt.Println("Seven, Under or Over? (s/u/o)")
+		c.Printf("\nSeven, Under or Over? [(s)even/(u)nder/(o)ver]\n\t")
 		_, err := fmt.Scanln(&picked)
 		if err != nil && err.Error() != "unexpected newline" {
-
-			log.Fatal("program failed: failed to get user input:", err)
+			panic("program failed: failed to get user input:" + err.Error())
 		}
 
 		// converting, if none match redo
