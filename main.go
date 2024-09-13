@@ -6,31 +6,45 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/fatih/color"
 )
 
 func main() {
-	fmt.Println(`
+	fmt.Printf(`
 Welcome to seven!
 The rules are simple, you bet if the sum of two dice rolls is over/under or equal with seven.
-You start with 25 money, your goal is to survive as many rounds as possible.
+You start with `)
+	color.New().Add(color.FgYellow).Printf("25 money")
+	fmt.Printf(`, your goal is to survive as many rounds as possible.
 A correct bet on Over/Under gives you that amount while a bet on seven returns three times the bet amount.
 
-Press Ctrl+C to exit.`)
+Press Ctrl+C to exit.\n`)
 
 	p, rounds := Player(25), 0
 	for {
 		bet := getBets()
 		amount := getBettingAmount(p)
-		dices := throwDices()
-		fmt.Printf("\n\tDice result: %d\n\t", dices)
+		diceA, diceB := throwDices()
+		sum := diceA + diceB
+
+		fmt.Printf("\n\tRolling Dices")
+		for range 5 {
+			time.Sleep(time.Millisecond * 150)
+			fmt.Print(".")
+		}
+		fmt.Printf("\n\n\tDice One: %d", diceA)
+		time.Sleep(time.Millisecond * 120)
+		fmt.Printf("\n\tDice Two: %d", diceB)
+		time.Sleep(time.Second * 2)
 
 		var won, gameOver bool
-		if p, won, gameOver = handleWinnings(p, bet, amount, dices); won {
-			color.Green("\n\tWon!")
+		if p, won, gameOver = handleWinnings(p, bet, amount, sum); won {
+			fmt.Printf("\n\n\tSum: %d, You WON!!!!! what a great bet", sum)
+			color.Green("Won!")
 		} else {
-			color.Red("\n\tLost!")
+			color.Red("\n\n\tSum: %d, You lost sucker!", sum)
 		}
 
 		if gameOver {
@@ -43,13 +57,13 @@ Press Ctrl+C to exit.`)
 
 }
 
-func throwDices() uint {
+func throwDices() (uint, uint) {
 	dice, err := rand.Int(rand.Reader, big.NewInt(6))
 	dice2, err := rand.Int(rand.Reader, big.NewInt(6))
 	if err != nil {
 		panic("failed to generate random number: " + err.Error())
 	}
-	return uint(2 + dice.Int64() + dice2.Int64())
+	return uint(1 + dice.Int64()), uint(1 + dice2.Int64())
 }
 
 func handleWinnings(p Player, bet Bet, betAmount uint, res uint) (updatedP Player, won bool, gameover bool) {
@@ -60,7 +74,7 @@ func handleWinnings(p Player, bet Bet, betAmount uint, res uint) (updatedP Playe
 	}
 
 	// check if bet was correct
-	if matchingBet := checkResult(res); matchingBet == bet {
+	if matchingBet := ToBet(res); matchingBet == bet {
 		switch matchingBet {
 		case Seven:
 			p = p.WinAmount(betAmount * 4)
@@ -72,19 +86,6 @@ func handleWinnings(p Player, bet Bet, betAmount uint, res uint) (updatedP Playe
 
 	// return player, which has lost and check if player has lost
 	return p, false, p.HasLost()
-}
-
-func checkResult(sum uint) Bet {
-	switch {
-	case 0 < sum && sum < 7:
-		return Under
-	case 7 < sum && sum < 13:
-		return Over
-	case sum == 7:
-		return Seven
-	default:
-		panic("bad sum, got: " + string(sum))
-	}
 }
 
 type Bet int
@@ -103,6 +104,19 @@ var betNames = map[Bet]string{
 
 func (b Bet) String() string {
 	return betNames[b]
+}
+
+func ToBet(sum uint) Bet {
+	switch {
+	case 0 < sum && sum < 7:
+		return Under
+	case 7 < sum && sum < 13:
+		return Over
+	case sum == 7:
+		return Seven
+	default:
+		panic("bad sum, got: " + string(sum))
+	}
 }
 
 func getBettingAmount(p Player) uint {
