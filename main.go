@@ -1,196 +1,320 @@
 package main
 
 import (
-	"crypto/rand"
+	"errors"
 	"fmt"
-	"math/big"
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/fatih/color"
+	"os"
 	"strconv"
 	"strings"
-	"time"
-
-	"github.com/fatih/color"
 )
 
-func main() {
-	fmt.Printf(`
-Welcome to seven!
-The rules are simple, you bet if the sum of two dice rolls is over/under or equal with seven.
-You start with `)
-	color.New().Add(color.FgYellow).Printf("25 money")
-	fmt.Printf(`, your goal is to survive as many rounds as possible.
-A correct bet on Over/Under gives you that amount while a bet on seven returns three times the bet amount.
-
-Press Ctrl+C to exit.\n`)
-
-	p, rounds := Player(25), 0
-	for {
-		bet := getBets()
-		amount := getBettingAmount(p)
-		diceA, diceB := throwDices()
-		sum := diceA + diceB
-
-		fmt.Printf("\n\tRolling Dices")
-		for range 5 {
-			time.Sleep(time.Millisecond * 150)
-			fmt.Print(".")
-		}
-		fmt.Printf("\n\n\tDice One: %d", diceA)
-		time.Sleep(time.Millisecond * 120)
-		fmt.Printf("\n\tDice Two: %d", diceB)
-		time.Sleep(time.Second * 2)
-
-		var won, gameOver bool
-		if p, won, gameOver = handleWinnings(p, bet, amount, sum); won {
-			fmt.Printf("\n\n\tSum: %d, You WON!!!!! what a great bet", sum)
-			color.Green("Won!")
-		} else {
-			color.Red("\n\n\tSum: %d, You lost sucker!", sum)
+func newModel() model {
+	betInp := textinput.New()
+	betInp.Width = 25
+	//betInp.Placeholder = "gamba amount"
+	betInp.CompletionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("32"))
+	betInp.Validate = func(s string) error {
+		if strings.TrimSpace(s) == "" {
+			return errors.New("no bet no gamba")
 		}
 
-		if gameOver {
-			fmt.Printf("\nYou have no funding left, you lose!\nYou have survived %d rounds.", rounds)
-			return
+		amount, err := strconv.Atoi(s)
+		if err != nil {
+			return errors.New("we don't gamble with words")
+		} else if amount == 0 {
+			return errors.New("no gamba without money")
+		} else if amount < 0 {
+			return errors.New("gamba without money?")
 		}
-
-		rounds++
+		assert(err == nil, "have to have a valid gamba amount")
+		return nil
 	}
 
+	return model{
+		bet:       None,
+		player:    Player(25),
+		betAmount: 1,
+		betInp:    betInp,
+	}
 }
 
-func throwDices() (uint, uint) {
-	dice, err := rand.Int(rand.Reader, big.NewInt(6))
-	dice2, err := rand.Int(rand.Reader, big.NewInt(6))
-	if err != nil {
-		panic("failed to generate random number: " + err.Error())
-	}
-	return uint(1 + dice.Int64()), uint(1 + dice2.Int64())
+type model struct {
+	focused       int
+	width, height int
+
+	// fields for placing the bet
+	bet       Bet
+	betcursor int
+	betErr    error
+
+	// fields for setting bet amount
+	player    Player
+	betAmount uint
+	betInp    textinput.Model
+
+	isGamba bool
+	game    Result
 }
 
-func handleWinnings(p Player, bet Bet, betAmount uint, res uint) (updatedP Player, won bool, gameover bool) {
-	// bet the amount, removing it from the player
-	p, ok := p.Bet(betAmount)
-	if !ok {
-		panic("inconsistent state, bet amount which player does not have funding for")
+func (m model) Init() tea.Cmd { return nil }
+
+func (m model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
+	if m.player.HasLost() {
+		return m, tea.Quit
 	}
 
-	// check if bet was correct
-	if matchingBet := ToBet(res); matchingBet == bet {
-		switch matchingBet {
-		case Seven:
-			p = p.WinAmount(betAmount * 4)
-		case Under, Over:
-			p = p.WinAmount(betAmount * 2)
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "tab":
+			m.focused++
+			m.focused %= 3
+			return m, nil
+		case "shift+tab":
+			m.focused--
+			m.focused %= 3
+			return m, nil
 		}
-		return p, true, false
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
 	}
 
-	// return player, which has lost and check if player has lost
-	return p, false, p.HasLost()
+	switch m.focused {
+	case 0:
+		return m.takeBet(msg)
+	case 1:
+		m.betInp.Focus()
+		m, cmd = m.placeBet(msg)
+		m.betInp.Blur()
+		return m, cmd
+	case 2:
+		return m.gamba(msg)
+	default:
+		panic("bad focus: " + string(m.focused))
+	}
 }
 
-type Bet int
+var bgStyle = lipgloss.NewStyle().Background(lipgloss.Color("34"))
+var errStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("160"))
+var activeColor = color.New(color.FgCyan)
 
 const (
-	Seven Bet = iota
-	Under
-	Over
+	totalWidth = 80
+	leftWidth  = 30
+	rightWidth = totalWidth - leftWidth - 4
 )
 
-var betNames = map[Bet]string{
-	Seven: "seven",
-	Under: "under",
-	Over:  "over",
+func (m model) View() string {
+	withBorder := lipgloss.NewStyle().Border(lipgloss.RoundedBorder())
+	leftSide := withBorder.Width(leftWidth)
+
+	var out strings.Builder
+	out.WriteString(
+		withBorder.Width(totalWidth).Render(
+			lipgloss.JoinVertical(lipgloss.Left,
+				lipgloss.Place(totalWidth, 7, lipgloss.Center, lipgloss.Center,
+					lipgloss.NewStyle().Foreground(lipgloss.Color("34")).Width(62).Render(
+						`
+                                              ____
+███████╗███████╗██╗   ██╗███████╗███╗   ██╗  /\' .\    _____
+██╔════╝██╔════╝██║   ██║██╔════╝████╗  ██║ /: \___\  / .  /\
+███████╗█████╗  ██║   ██║█████╗  ██╔██╗ ██║ \' / . / /____/..\
+╚════██║██╔══╝  ╚██╗ ██╔╝██╔══╝  ██║╚██╗██║  \/___/  \'  '\  /
+███████║███████╗ ╚████╔╝ ███████╗██║ ╚████║           \'__'\/
+╚══════╝╚══════╝  ╚═══╝  ╚══════╝╚═╝  ╚═══╝
+`),
+				),
+
+				lipgloss.NewStyle().MarginTop(2).MarginLeft(3).MarginRight(3).Render(
+					lipgloss.JoinHorizontal(lipgloss.Left,
+						lipgloss.JoinVertical(lipgloss.Center,
+							leftSide.Render(m.renderTakeBet()),
+							leftSide.Render(m.renderPlaceBet()),
+						),
+						lipgloss.Place(rightWidth, 15, lipgloss.Center, lipgloss.Center,
+							m.renderGamba(),
+						),
+					),
+				),
+			),
+		),
+	)
+
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center,
+		lipgloss.Center,
+
+		out.String(),
+	)
 }
 
-func (b Bet) String() string {
-	return betNames[b]
-}
-
-func ToBet(sum uint) Bet {
-	switch {
-	case 0 < sum && sum < 7:
-		return Under
-	case 7 < sum && sum < 13:
-		return Over
-	case sum == 7:
-		return Seven
-	default:
-		panic("bad sum, got: " + string(sum))
-	}
-}
-
-func getBettingAmount(p Player) uint {
-	c := color.New().Add(color.Underline)
-	for {
-		var picked string
-
-		c.Printf("\n\n\t\tWhat amount do you want to bet? You've got %d money\n\t\t", p)
-		_, err := fmt.Scanln(&picked)
-		if err != nil && err.Error() != "unexpected newline" {
-			panic("program failed: failed to get user input:" + err.Error())
-		}
-
-		amount, err := strconv.Atoi(picked)
-		switch {
-		case err != nil:
-		case amount <= 0:
-			fmt.Printf("\n\t\tYou have to bet at least one money!\n\t\t")
-		case !p.CanBet(uint(amount)):
-			fmt.Printf("\n\t\tTo little money for that bet, you've got %d money\n\t\t", p)
-		default:
-			return uint(amount)
-		}
-	}
-}
-
-func getBets() Bet {
-	c := color.New().Add(color.Underline)
-	for {
-		var picked string
-
-		c.Printf("\n\tSeven, Under or Over? [(s)even/(u)nder/(o)ver]\n\t")
-		_, err := fmt.Scanln(&picked)
-		if err != nil && err.Error() != "unexpected newline" {
-			panic("program failed: failed to get user input:" + err.Error())
-		}
-
-		// converting, if none match redo
-		switch strings.ToLower(picked) {
-		case "seven", "s":
-			return Seven
-		case "under", "u":
-			return Under
-		case "over", "o":
-			return Over
-		default:
+func (m model) takeBet(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "up", "k":
+			if m.betcursor > 0 {
+				m.betcursor--
+			}
+		case "down", "j":
+			if m.betcursor < len(Bets)-1 {
+				m.betcursor++
+			}
+		case "enter", " ":
+			m.bet = Bets[m.betcursor]
+			m.betErr = nil
 		}
 	}
+	return m, nil
 }
 
-type Player uint
-
-func (p Player) Bet(amount uint) (Player, bool) {
-	if left := p - Player(amount); left >= 0 {
-		return left, true
+func (m model) renderTakeBet() string {
+	bet := "What are you betting for?\n\n"
+	for i, choice := range Bets {
+		cursor := " "
+		if m.betcursor == i {
+			cursor = ">"
+		}
+		checked := " "
+		if choice == m.bet {
+			checked = "x"
+		}
+		row := fmt.Sprintf("%s [%s] %s", cursor, checked, choice.String())
+		if m.betcursor == i && m.focused == 0 {
+			bet += activeColor.Sprintf(row)
+		} else {
+			bet += row
+		}
+		bet += "\n"
 	}
-	return p, false
+	if m.betErr != nil {
+		bet += errStyle.Render(fmt.Sprintf("  *%v", m.betErr))
+	} else {
+		bet += ""
+	}
+	return bet
 }
 
-func (p Player) CanBet(amount uint) bool {
-	if Player(amount) > p {
-		color.Blue("\n\nYou have found an easter egg, a buffer overflow!\n\n")
+func (m model) placeBet(msg tea.Msg) (model, tea.Cmd) {
+	var cmd tea.Cmd
+	m.betInp, cmd = m.betInp.Update(msg)
+	if m.betInp.Err == nil {
+		val := m.betInp.Value()
+		if val == "" { // checking for empty input, will cause ParseError otherwise
+			return m, cmd
+		}
+		amount, err := strconv.Atoi(val)
+
+		if !m.player.CanBet(uint(amount)) { // check if player has enough funds
+			m.betInp.Err = fmt.Errorf("you have %d money", m.player)
+			return m, cmd
+		}
+		assert(err == nil, "bad amount got validated")
+		assert(amount != 0, "zero amount placed; "+val)
+		m.betAmount = uint(amount)
+	}
+	return m, cmd
+}
+
+func (m model) renderPlaceBet() string {
+	inp := m.betInp
+	betted := inp.View()
+
+	if m.focused == 1 {
+		betted = activeColor.Sprint(betted)
+	}
+	betted += "\n"
+
+	if inp.Err != nil {
+		betted += errStyle.Render("  *" + inp.Err.Error())
 	}
 
-	if left := p - Player(amount); left >= 0 {
-		return true
+	return betted
+}
+
+func (m model) gamba(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "enter":
+			var bad bool
+
+			// if no bet has been placed yet
+			if m.bet == None {
+				m.betErr = errors.New("pls bet on something")
+				bad = true
+			}
+
+			// if the bet amount is invalid
+			if m.betInp.Err != nil {
+				return m, nil
+			}
+			// if no bet amount has been placed
+			if m.betInp.Value() == "" {
+				m.betInp.Err = errors.New("please place a bet")
+				bad = true
+			}
+
+			// How to do this?
+			if !bad {
+				m.game, m.player = m.player.playRound(m.bet, m.betAmount)
+			}
+			return m, nil
+		}
 	}
-	return false
+	return m, nil
 }
 
-func (p Player) WinAmount(amount uint) Player {
-	return p + Player(amount)
+func (m model) renderGamba() string {
+	msg := color.HiGreenString("You won!")
+	if m.game.Lost {
+		msg = color.HiRedString("You Lost!")
+	}
+	msg = fmt.Sprintf("   %10s", msg)
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.JoinHorizontal(lipgloss.Center,
+			func(prev lipgloss.Style, active bool) lipgloss.Style {
+				if active {
+					activeColor := lipgloss.Color("#00E6E6")
+					prev = prev.Border(lipgloss.ThickBorder()).BorderForeground(activeColor).Foreground(activeColor)
+				} else {
+					prev = prev.Border(lipgloss.ThickBorder())
+				}
+				return prev
+			}(lipgloss.NewStyle(), m.focused == 2).Render(
+				"gamba",
+			),
+			msg,
+		),
+		fmt.Sprintf(`
+ Dice 1 | Dice 2 | Total
+--------+--------+-------
+ %2d     | %2d     | %2d    `, m.game.DiceA, m.game.DiceB, m.game.DiceA+m.game.DiceB),
+		lipgloss.NewStyle().MarginTop(1).Render(
+			color.New(color.FgYellow).Sprintf("You have %d money", m.player),
+		),
+	)
 }
 
-func (p Player) HasLost() bool {
-	return p == 0
+func main() {
+	p := tea.NewProgram(newModel(), tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		fmt.Printf("Alas, there's been an error: %v", err)
+		os.Exit(1)
+	}
+}
+
+func assert(statment bool, msg string) {
+	if !statment {
+		panic(msg)
+	}
 }
