@@ -16,7 +16,8 @@ type Result struct {
 func (p Player) playRound(bet Bet, betAmount uint) (Result, Player) {
 	res := Result{}
 	res.DiceA, res.DiceB = throwDices()
-	p, res.Lost, _ = handleWinnings(p, bet, betAmount, res.DiceA+res.DiceB)
+	p, won, _ := handleWinnings(p, bet, betAmount, res.DiceA+res.DiceB)
+	res.Lost = !won
 	return res, p
 }
 

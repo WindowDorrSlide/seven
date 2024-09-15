@@ -15,9 +15,12 @@ import (
 func newModel() model {
 	betInp := textinput.New()
 	betInp.Width = 25
-	//betInp.Placeholder = "gamba amount"
+	betInp.Placeholder = "gamba amount"
 	betInp.CompletionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("32"))
+
+	// set a validater function for the input
 	betInp.Validate = func(s string) error {
+		// check if no input
 		if strings.TrimSpace(s) == "" {
 			return errors.New("no bet no gamba")
 		}
@@ -56,17 +59,18 @@ type model struct {
 	betAmount uint
 	betInp    textinput.Model
 
-	isGamba bool
-	game    Result
+	game Result
 }
 
 func (m model) Init() tea.Cmd { return nil }
 
 func (m model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
+	// check if player can play another round
 	if m.player.HasLost() {
 		return m, tea.Quit
 	}
 
+	// handle switching focus and quiting
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -86,6 +90,7 @@ func (m model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		m.height = msg.Height
 	}
 
+	// let focused item handle functionality
 	switch m.focused {
 	case 0:
 		return m.takeBet(msg)
@@ -101,9 +106,8 @@ func (m model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	}
 }
 
-var bgStyle = lipgloss.NewStyle().Background(lipgloss.Color("34"))
 var errStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("160"))
-var activeColor = color.New(color.FgCyan)
+var activeColor = lipgloss.NewStyle().Foreground(lipgloss.Color("#804000"))
 
 const (
 	totalWidth = 80
@@ -115,12 +119,15 @@ func (m model) View() string {
 	withBorder := lipgloss.NewStyle().Border(lipgloss.RoundedBorder())
 	leftSide := withBorder.Width(leftWidth)
 
+	// chaos
 	var out strings.Builder
 	out.WriteString(
-		withBorder.Width(totalWidth).Render(
+		withBorder.Border(lipgloss.BlockBorder()).Width(totalWidth).Render(
 			lipgloss.JoinVertical(lipgloss.Left,
-				lipgloss.Place(totalWidth, 7, lipgloss.Center, lipgloss.Center,
-					lipgloss.NewStyle().Foreground(lipgloss.Color("34")).Width(62).Render(
+				lipgloss.Place(
+					totalWidth, 7,
+					lipgloss.Center, lipgloss.Center,
+					lipgloss.NewStyle().Foreground(lipgloss.Color("#005c78")).Width(62).Render(
 						`
                                               ____
 ███████╗███████╗██╗   ██╗███████╗███╗   ██╗  /\' .\    _____
@@ -133,13 +140,15 @@ func (m model) View() string {
 				),
 
 				lipgloss.NewStyle().MarginTop(2).MarginLeft(3).MarginRight(3).Render(
-					lipgloss.JoinHorizontal(lipgloss.Left,
+					lipgloss.JoinHorizontal(lipgloss.Center,
 						lipgloss.JoinVertical(lipgloss.Center,
-							leftSide.Render(m.renderTakeBet()),
-							leftSide.Render(m.renderPlaceBet()),
+							leftSide.Render(m.renderTakeBet(m.focused == 0)),
+							leftSide.Render(m.renderPlaceBet(m.focused == 1)),
 						),
 						lipgloss.Place(rightWidth, 15, lipgloss.Center, lipgloss.Center,
-							m.renderGamba(),
+							lipgloss.NewStyle().BorderForeground(lipgloss.Color("#f22453")).Render(
+								m.renderGamba(m.focused == 2),
+							),
 						),
 					),
 				),
@@ -149,9 +158,7 @@ func (m model) View() string {
 
 	return lipgloss.Place(
 		m.width, m.height,
-		lipgloss.Center,
-		lipgloss.Center,
-
+		lipgloss.Center, lipgloss.Center,
 		out.String(),
 	)
 }
@@ -176,8 +183,10 @@ func (m model) takeBet(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) renderTakeBet() string {
+func (m model) renderTakeBet(active bool) string {
 	bet := "What are you betting for?\n\n"
+
+	// render all options
 	for i, choice := range Bets {
 		cursor := " "
 		if m.betcursor == i {
@@ -188,17 +197,17 @@ func (m model) renderTakeBet() string {
 			checked = "x"
 		}
 		row := fmt.Sprintf("%s [%s] %s", cursor, checked, choice.String())
-		if m.betcursor == i && m.focused == 0 {
-			bet += activeColor.Sprintf(row)
+		if m.betcursor == i && active {
+			bet += activeColor.Render(row)
 		} else {
 			bet += row
 		}
 		bet += "\n"
 	}
+
+	// render error if there is one
 	if m.betErr != nil {
 		bet += errStyle.Render(fmt.Sprintf("  *%v", m.betErr))
-	} else {
-		bet += ""
 	}
 	return bet
 }
@@ -206,37 +215,45 @@ func (m model) renderTakeBet() string {
 func (m model) placeBet(msg tea.Msg) (model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.betInp, cmd = m.betInp.Update(msg)
-	if m.betInp.Err == nil {
-		val := m.betInp.Value()
-		if val == "" { // checking for empty input, will cause ParseError otherwise
-			return m, cmd
-		}
-		amount, err := strconv.Atoi(val)
-
-		if !m.player.CanBet(uint(amount)) { // check if player has enough funds
-			m.betInp.Err = fmt.Errorf("you have %d money", m.player)
-			return m, cmd
-		}
-		assert(err == nil, "bad amount got validated")
-		assert(amount != 0, "zero amount placed; "+val)
-		m.betAmount = uint(amount)
+	if m.betInp.Err != nil {
+		return m, cmd
 	}
+
+	// getting value and converting it to int
+	val := m.betInp.Value()
+	if val == "" { // checking for empty input, will cause ParseError otherwise
+		return m, cmd
+	}
+	amount, err := strconv.Atoi(val)
+
+	// check if player has enough funds
+	if !m.player.CanBet(uint(amount)) {
+		m.betInp.Err = fmt.Errorf("you have %d money", m.player)
+		return m, cmd
+	}
+	assert(err == nil, "bad amount got validated")
+	assert(amount != 0, "zero amount placed; "+val)
+
+	// update the amount betted
+	m.betAmount = uint(amount)
 	return m, cmd
 }
 
-func (m model) renderPlaceBet() string {
-	inp := m.betInp
-	betted := inp.View()
+func (m model) renderPlaceBet(active bool) string {
+	// render the view
+	betted := m.betInp.View()
 
-	if m.focused == 1 {
-		betted = activeColor.Sprint(betted)
+	// change text color if it is active
+	if active {
+		betted = activeColor.Render(betted)
 	}
+	// add to item after so it doesnt get colored, causing chaos
 	betted += "\n"
 
-	if inp.Err != nil {
-		betted += errStyle.Render("  *" + inp.Err.Error())
+	// print error
+	if m.betInp.Err != nil {
+		betted += errStyle.Render("  *" + m.betInp.Err.Error())
 	}
-
 	return betted
 }
 
@@ -265,6 +282,12 @@ func (m model) gamba(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// How to do this?
 			if !bad {
+				// check if player has enough funds, if the amount is not changed it won't validate
+				// meaning the player could spend more then he has funding to
+				if !m.player.CanBet(m.betAmount) {
+					m.betInp.Err = fmt.Errorf("you have %d money", m.player)
+					return m, nil
+				}
 				m.game, m.player = m.player.playRound(m.bet, m.betAmount)
 			}
 			return m, nil
@@ -273,34 +296,40 @@ func (m model) gamba(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) renderGamba() string {
+func (m model) renderGamba(active bool) string {
+	// victory msg
 	msg := color.HiGreenString("You won!")
-	if m.game.Lost {
+	if m.game.DiceA == 0 { // If no game has been played yet
+		msg = ""
+	} else if m.game.Lost { // Set text if lost
 		msg = color.HiRedString("You Lost!")
 	}
 	msg = fmt.Sprintf("   %10s", msg)
 
+	// render
 	return lipgloss.JoinVertical(lipgloss.Left,
 		lipgloss.JoinHorizontal(lipgloss.Center,
 			func(prev lipgloss.Style, active bool) lipgloss.Style {
 				if active {
-					activeColor := lipgloss.Color("#00E6E6")
-					prev = prev.Border(lipgloss.ThickBorder()).BorderForeground(activeColor).Foreground(activeColor)
+					activeColor := lipgloss.Color("#804000")
+					prev = prev.Border(lipgloss.RoundedBorder()).BorderForeground(activeColor)
 				} else {
-					prev = prev.Border(lipgloss.ThickBorder())
+					prev = prev.Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#f22453"))
 				}
 				return prev
-			}(lipgloss.NewStyle(), m.focused == 2).Render(
+			}(lipgloss.NewStyle().Foreground(lipgloss.Color("#f22453")), active).Render(
 				"gamba",
 			),
 			msg,
 		),
 		fmt.Sprintf(`
- Dice 1 | Dice 2 | Total
---------+--------+-------
- %2d     | %2d     | %2d    `, m.game.DiceA, m.game.DiceB, m.game.DiceA+m.game.DiceB),
-		lipgloss.NewStyle().MarginTop(1).Render(
-			color.New(color.FgYellow).Sprintf("You have %d money", m.player),
+ Dice A │ Dice B │ Total
+────────┼────────┼───────
+ %2d     │ %2d     │ %2d    `, m.game.DiceA, m.game.DiceB, m.game.DiceA+m.game.DiceB),
+		lipgloss.Place(25, 1, lipgloss.Right, lipgloss.Center,
+			lipgloss.NewStyle().MarginTop(1).Foreground(lipgloss.Color("#dbcf60")).Render(
+				fmt.Sprintf("%d \u00A9", m.player),
+			),
 		),
 	)
 }
