@@ -61,7 +61,7 @@ const (
 	None
 )
 
-var Bets = []Bet{Under, Over, Seven}
+var Bets = []Bet{Under, Seven, Over}
 
 var betNames = map[Bet]string{
 	Seven: "seven",
