@@ -176,7 +176,17 @@ func (m model) takeBet(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.betcursor++
 			}
 		case "enter", " ":
-			m.bet = Bets[m.betcursor]
+			bet := Bets[m.betcursor]
+
+			// if we have bet on the current item remove the bet
+			if m.bet == bet {
+				m.bet = None
+				break
+			}
+			// place the bet
+			m.bet = bet
+
+			// remove any errors set
 			m.betErr = nil
 		}
 	}

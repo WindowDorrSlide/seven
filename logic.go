@@ -3,9 +3,10 @@ package main
 import (
 	"crypto/rand"
 	"fmt"
-	"github.com/fatih/color"
 	"math/big"
 	"strings"
+
+	"github.com/fatih/color"
 )
 
 type Result struct {
@@ -61,7 +62,7 @@ const (
 	None
 )
 
-var Bets = []Bet{Under, Seven, Over}
+var Bets = []Bet{Over, Seven, Under}
 
 var betNames = map[Bet]string{
 	Seven: "seven",
